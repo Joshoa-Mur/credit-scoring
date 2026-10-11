@@ -5,8 +5,11 @@ from contextlib import asynccontextmanager
 import joblib
 import numpy as np
 import pandas as pd
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from credit_scoring import db
 from credit_scoring.config import settings
@@ -61,6 +64,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="credit-scoring-service", version="1.0", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def log_validation_error(request: Request, exc: RequestValidationError):
+    # стандартный ответ 422, такой же, как без этого обработчика
+    response = await request_validation_exception_handler(request, exc)
+
+    if request.url.path == "/v1/predict":
+        request_id = str(uuid.uuid4())
+        body = exc.body if isinstance(exc.body, dict) else None
+        response.background = BackgroundTask(
+            db.save_prediction, request_id, body, None, request.app.state.version, None, 422
+        )
+        response.headers["X-Request-ID"] = request_id
+
+    return response
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "model_version": getattr(app.state, "version", "unknown")}
@@ -88,7 +107,7 @@ def predict(x: Features, bg: BackgroundTasks) -> Prediction:
     score = float(app.state.pipeline.predict_proba(frame)[0, 1])
     latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
-    bg.add_task(db.save_prediction, request_id, payload, score, app.state.version, latency_ms)
+    bg.add_task(db.save_prediction, request_id, payload, score, app.state.version, latency_ms, 200)
 
     default = score >= app.state.meta["threshold"]
 
