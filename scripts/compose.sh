@@ -19,5 +19,5 @@ curl -s -o /dev/null -w "HTTP %{http_code}\n" -X POST http://localhost:8000/v1/p
 sleep 1  
 
 echo "логи предсказаний в Postgres"
-docker compose exec -T db psql -U postgres -d scoring -c \
+docker compose exec -T db psql -U postgres -d credit -c \
   "SELECT request_id, status_code, score, latency_ms, created_at FROM predictions ORDER BY id DESC LIMIT 10;"
