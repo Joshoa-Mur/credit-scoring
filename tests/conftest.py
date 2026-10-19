@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from credit_scoring.service.app import app
 
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:
