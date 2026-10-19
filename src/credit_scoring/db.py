@@ -32,6 +32,9 @@ def init() -> None:
         return
     try:
         with psycopg.connect(settings.database_url) as conn:
+            # Две реплики стартуют одновременно: без блокировки оба CREATE TABLE IF NOT EXISTS
+            # могут гонкой упасть на unique-индексе pg_type. Лок держится до конца транзакции.
+            conn.execute("SELECT pg_advisory_xact_lock(424242)")
             conn.execute(CREATE_TABLE)
     except Exception:
         log.exception("Could not initialize the predictions table")
