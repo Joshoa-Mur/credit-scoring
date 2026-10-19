@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: scoring-service
+  name: credit-scoring
 spec:
   replicas: 2
   selector:
@@ -14,10 +14,13 @@ spec:
     spec:
       containers:
         - name: api
-          image: credit-scoring:1.0
+          image: IMAGE_PLACEHOLDER
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+          envFrom:
+            - configMapRef: {name: scoring-config}
+            - secretRef: {name: credit-secrets}
           lifecycle:
             preStop:
               sleep: {seconds: 5}
@@ -32,5 +35,5 @@ spec:
             httpGet: {path: /ready, port: 8000}
             periodSeconds: 5
           resources:
-            requests: {cpu: 100m, memory: 512Mi}
-            limits: {cpu: "1", memory: 1Gi}
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
