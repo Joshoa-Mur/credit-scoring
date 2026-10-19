@@ -11,17 +11,36 @@ pytestmark = [
 ]
 
 
-def test_prediction_is_logged(client, good_request):
-    body = client.post("/v1/predict", json=good_request).json()
-
+def fetch_row(request_id):
     with psycopg.connect(DATABASE_URL) as conn:
-        row = conn.execute(
-            "SELECT model_version, score, features->>'checking_status' "
+        return conn.execute(
+            "SELECT model_version, score, features->>'checking_status', status_code "
             "FROM predictions WHERE request_id = %s",
-            (body["request_id"],),
+            (request_id,),
         ).fetchone()
+
+
+def test_prediction_is_logged(client, good_request):
+    r = client.post("/v1/predict", json=good_request)
+    assert r.status_code == 200
+    body = r.json()
+
+    row = fetch_row(body["request_id"])
 
     assert row is not None
     assert row[0] == body["model_version"]
     assert row[1] == pytest.approx(body["score"])
-    assert row[2] == good_request['checking_status']
+    assert row[2] == good_request["checking_status"]
+    assert row[3] == 200
+
+
+def test_invalid_request_is_logged_with_422(client, good_request):
+    r = client.post("/v1/predict", json={**good_request, "duration": "мусор"})
+    assert r.status_code == 422
+
+    request_id = r.headers["X-Request-ID"]
+    row = fetch_row(request_id)
+
+    assert row is not None
+    assert row[1] is None   
+    assert row[3] == 422
