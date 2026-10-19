@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_path: str = "models/credit_model.joblib" # в последствии будем оборачивать веса модели в MLFlow или DVC
+    model_path: str = "models/credit_model.joblib"
     model_name: str | None = None
     model_alias: str = "champion"
     mlflow_tracking_uri: str = "http://127.0.0.1:5000"
