@@ -16,4 +16,4 @@ def test_predict_smoke(client, good_request):
 
 def test_predict_handles_missing_savings_status(client, good_request):
     r = client.post("/v1/predict", json={**good_request, "savings_status": None})
-    assert r.status_code == 999
+    assert r.status_code == 200
