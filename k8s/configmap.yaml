@@ -4,4 +4,4 @@ metadata:
   name: scoring-config
 data:
   LOG_LEVEL: "INFO"
-  MODEL_PATH: /app/models/credit_model.joblib
+  MODEL_PATH: /app/models/wrong_path.joblib
