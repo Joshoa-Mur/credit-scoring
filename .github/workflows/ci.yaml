@@ -32,7 +32,6 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest -v
 
-
   build:
     needs: tests
     if: github.ref == 'refs/heads/main'
@@ -55,3 +54,65 @@ jobs:
           tags: ${{ env.IMAGE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions: {contents: read, packages: read}
+
+    steps:
+      - uses: actions/checkout@v6
+      - run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/credit-scoring:${GITHUB_SHA}" >> $GITHUB_ENV
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: helm/kind-action@v1
+        with: {cluster_name: ci}
+
+      - name: образ в кластер
+        run: |
+          docker pull "$IMAGE"
+          kind load docker-image "$IMAGE" --name ci
+
+      - name: секреты
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          kubectl create secret generic credit-secrets \
+            --from-literal=POSTGRES_PASSWORD="$DB_PASSWORD" \
+            --from-literal=DATABASE_URL="postgresql://postgres:$DB_PASSWORD@postgres:5432/credit"
+
+      - name: БД
+        run: |
+          kubectl apply -f k8s/postgres.yaml
+          kubectl rollout status deploy/postgres --timeout=180s
+
+      - name: сервис
+        run: |
+          kubectl apply -f k8s/
+          kubectl set image deploy/credit-scoring api="$IMAGE"
+          kubectl rollout status deploy/credit-scoring --timeout=180s
+
+      - name: smoke
+        run: |
+          kubectl port-forward svc/scoring-service 8080:80 &
+          sleep 5
+          curl --fail -s localhost:8080/health; echo
+          curl --fail -s -X POST localhost:8080/v1/predict \
+            -H "Content-Type: application/json" -d @request.json \
+          | python3 -c "import json,sys; r=json.load(sys.stdin); print(r); assert 0 <= r['score'] <= 1, r"
+          sleep 2
+          ROWS=$(kubectl exec deploy/postgres -- psql -U postgres -d credit -tAc "SELECT count(*) FROM predictions")
+          echo "rows: $ROWS"
+          [ "$ROWS" -ge 1 ]
+
+      - name: диагностика
+        if: failure()
+        run: |
+          kubectl get pods -o wide
+          kubectl describe deploy/credit-scoring | tail -20
+          kubectl logs deploy/credit-scoring --tail=30 || true
