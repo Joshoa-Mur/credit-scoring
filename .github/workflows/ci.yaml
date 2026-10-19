@@ -12,14 +12,16 @@ jobs:
     services:
       postgres:
         image: postgres:16
-        env: [POSTGRES_PASSWORD : test , POSTGRES_DB : churn]
-        ports : ["5432:5432"]
-        options : >-
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: credit
+        ports: ["5432:5432"]
+        options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 3s --health-retries 10
 
     env:
-      DATABASE_URL = postgresql://postgres:test@localhost:5432/credit
+      DATABASE_URL: postgresql://postgres:test@localhost:5432/credit
 
     steps:
       - uses: actions/checkout@v6
@@ -28,5 +30,4 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run ruff check .
-      - run: uv run pytest
-
+      - run: uv run pytest -v
