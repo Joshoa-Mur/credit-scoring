@@ -101,7 +101,8 @@ jobs:
         run: |
           kubectl port-forward svc/scoring-service 8080:80 &
           sleep 5
-          curl --fail -s localhost:8080/health; echo
+          curl --fail -s localhost:8080/health \
+          | python3 -c "import json,sys; r=json.load(sys.stdin); print(r); assert r['model_path'] == '/app/models/credit_model.joblib', r"
           curl --fail -s -X POST localhost:8080/v1/predict \
             -H "Content-Type: application/json" -d @request.json \
           | python3 -c "import json,sys; r=json.load(sys.stdin); print(r); assert 0 <= r['score'] <= 1, r"
