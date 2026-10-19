@@ -20,7 +20,7 @@ spec:
             - containerPort: 8000
           envFrom:
             - configMapRef: {name: scoring-config}
-            - secretRef: {name: credit-secrets}
+            - secretRef: {name: credit-secret}
           lifecycle:
             preStop:
               sleep: {seconds: 5}
