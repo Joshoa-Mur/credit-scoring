@@ -1,83 +1,113 @@
-# Отчёт по домашнему заданию 1
+# Домашка 2: CI/CD для сервиса из домашки 1
 
-Кредитный скоринг на German Credit: CatBoost в sklearn `Pipeline`, сервис на FastAPI,
-логи в Postgres, Docker Compose и Kubernetes (kind). 
+Отчёт по первой домашке лежит в `REPORT_HW1.md`.
 
-## 1. Тесты
+Пайплайн в `.github/workflows/ci.yaml`, манифесты в `k8s/`. На каждый PR запускаются только тесты,
+на push в main весь пайплайн: tests, build, deploy.
 
-`uv run pytest -v` при запущенном compose, чтобы выполнились и интеграционные тесты с базой:
+## Ссылки
 
-```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/credit uv run pytest -v
-```
+| Пункт | Ссылка |
+|---|---|
+| Зелёный прогон со всеми тремя job | https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39294469731 |
+| Образ в GHCR с тегом по sha | https://github.com/Joshoa-Mur/credit-scoring/pkgs/container/credit-scoring |
+| PR с красным и зелёным прогоном | https://github.com/Joshoa-Mur/credit-scoring/pull/1 |
+| Поломка 1 (конфиг): красный / зелёный | https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39302821405 / https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39305233828 |
+| Поломка 2 (секрет): красный / зелёный | https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39309178265 / https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39310273002 |
+| Поломка 3 (ресурсы): красный / зелёный | https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39310959114 / https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39312185496 |
 
-Покрыто: контракт (422 на мусор, лишнее и пропущенное поле), smoke (диапазон `score` и типы ответа),
-детерминизм (один вход дважды даёт один ответ), запись запроса в Postgres.
+## Что сделано под свой сервис
 
-![pytest](docs/img/pytest.png)
+Интеграционный тест (`tests/test_integration.py`) отправляет нормальный запрос и проверяет, что в
+таблице `predictions` появилась строка с версией модели, score, одной из фич и кодом 200. Второй тест
+отправляет запрос с мусором в `duration`, получает 422 и по заголовку `X-Request-ID` находит строку
+с кодом 422.
 
-## 2. Логи в Postgres (compose)
+Из ConfigMap приходят `MODEL_PATH` и `LOG_LEVEL`. Оба значения видны в ответе `/health`, и smoke в CI
+проверяет, что путь к модели именно тот, что задан в ConfigMap, а не дефолтный из кода.
 
-`bash scripts/compose.sh`: валидный запрос (200), невалидный (422) и `SELECT` из таблицы `predictions`.
-Код ответа хранится в поле `status_code`; у отклонённых запросов `score` пустой.
+Smoke отправляет запрос из `request.json`, проверяет, что score лежит в [0, 1], и что в базе
+появилась запись.
 
-![SELECT из таблицы логов](docs/img/select.png)
+## Процесс
 
-## 3. Kubernetes: две реплики и ответ модели через port-forward
+Пайплайн собирал в ветке `ci-pipeline` и слил через PR #1. Перед мержем специально сломал тест
+(ожидал код 999 вместо 200), проверка на PR покраснела, следующим коммитом вернул как было,
+дождался зелёной и слил.
 
-`bash scripts/kind.sh`: `kubectl get pods` с двумя подами в `Running` и ответ `/v1/predict` через `kubectl port-forward`.
+## Три поломки
 
-![get pods и predict](docs/img/kind.png)
+**Конфиг (неверный путь к модели).** Красный job deploy, шаг «сервис»: rollout не дождался готовых
+подов. Под в CrashLoopBackOff. В логах контейнера `FileNotFoundError` с тем самым путём из
+`MODEL_PATH`, приложение падает при старте. Раз контейнер запускается и падает на чтении файла по
+пути из настроек, значит проблема в конфиге, а не в образе.
 
-## 4. k9s
+**Секрет (secretRef на `credit-secret` вместо `credit-secrets`).** Снова deploy, шаг «сервис».
+Под в CreateContainerConfigError, перезапусков нет, логов приложения нет вообще. Контейнер даже
+не создавался: Kubernetes не смог подставить переменные из секрета. Postgres при этом поднялся,
+значит сам секрет есть и сервис ищет его не под тем именем.
 
-![k9s](docs/img/k9s.png)
+**Ресурсы (requests памяти 1000000000Mi).** Deploy, шаг «сервис». Под висит в Pending и не
+назначен ни на один узел, в событиях `Insufficient memory`. Логов нет, потому что до запуска
+дело не дошло: планировщик не нашёл узел с таким количеством памяти.
+
+## Вопросы
+
+**1.** Build в первом прогоне шёл 1 мин 39 с, во втором 22 с (первый: https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39294469731, второй: https://github.com/Joshoa-Mur/credit-scoring/actions/runs/39300817009). Из кэша взялся слой
+с установкой зависимостей (`uv sync --no-install-project`). Он зависит только от `pyproject.toml`
+и `uv.lock`, которые не менялись, и стоит в Dockerfile раньше копирования кода, поэтому правки кода
+его не сбрасывают.
+
+**2.** Сначала `kubectl apply` создаёт Deployment с заглушкой вместо образа, и эти поды не могут
+скачать образ. Сразу после этого `set image` ставит настоящий образ, Kubernetes поднимает новые
+поды и удаляет старые. `rollout status` ждёт только новые, поэтому прогон зелёный.
+
+**3.** Пароль лежит в Secrets репозитория, в шаге деплоя через `secrets.DB_PASSWORD` попадает в
+команду `kubectl create secret`, оттуда в Secret кластера, а под получает его как переменную
+окружения через `secretRef`. В `configmap.yaml` класть нельзя: репозиторий публичный, и пароль
+остался бы в истории git навсегда.
+
+**4.** Без `needs` build пошёл бы параллельно с тестами. Если коммит ломает сервис, тесты упадут,
+но образ к этому моменту уже соберётся, запушится и уедет в deploy. Сломанная версия окажется в
+кластере, хотя тесты её не пропустили.
+
+**5.** За это отвечает `if: github.ref == 'refs/heads/main'` у build и deploy. PR это ещё не
+принятый код, его достаточно проверить тестами. Публиковать образ и деплоить имеет смысл только то,
+что уже попало в main.
+
+**6.** Реплики здесь это два пода сервиса (`replicas: 2`). Оба при старте вызывают `init()` и
+создают таблицу. На пустой базе два одновременных `CREATE TABLE IF NOT EXISTS` могут столкнуться,
+и один упадёт с ошибкой. Advisory lock заставляет второй под подождать, пока первый закончит.
+В моём `init()` его изначально не было, добавил в этой домашке.
+
+**7.** По порядку жизни пода: Pending (поломка 3, под не могут поставить на узел), затем
+CreateContainerConfigError (поломка 2, узел есть, но контейнер не собрать без секрета), затем
+CrashLoopBackOff (поломка 1, контейнер запустился, но приложение падает).
 
 ## Журнал проблем
 
-### 1. `uv sync` не поставил основные зависимости
+**Ruff проверял весь диск.** `Found 101242 errors` по чужим проектам. В путях было
+`dev/train_projects/...`, то есть запускал из домашней папки. Запустил из корня проекта.
 
-**Симптом:** в выводе `uv sync` были только pytest, ruff и locust, а fastapi, catboost и scikit-learn отсутствовали.
-
-**Причина:** список `dependencies` в `[project]` был пустым.
-
-**Как починил:** `uv add catboost scikit-learn pandas joblib fastapi uvicorn pydantic "psycopg[binary]"`.
-
-### 2. `InconsistentVersionWarning` при загрузке модели
-
-**Ошибка:**
-```
-InconsistentVersionWarning: Trying to unpickle estimator SimpleImputer from version 1.9.0 when using version 1.9.1
-```
-
-**Причина:** ноутбук обучения был запущен на ядре не из `.venv` проекта, и модель сохранилась другой версией scikit-learn.
-
-**Как починил:** выбрал в VS Code ядро `HW1/.venv` и переобучил модель.
-
-### 3. Сервис не стартует: нет `db.init`
-
-**Ошибка:**
-```
-AttributeError: module 'credit_scoring.db' has no attribute 'init'
-ERROR:    Application startup failed. Exiting.
-```
-
-**Причина:** файл `db.py` был пустым.
-
-**Как починил:** добавил в `db.py` функции `init()` и `save_prediction()`.
+**Лимит длины строки сбросился на 88.** После правки `pyproject.toml` пропал `line-length = 100`.
+Вернул, для ноутбуков отключил E501.
 
 
-### 4. Логи не появлялись в Postgres
 
-`SELECT` из `predictions` возвращал 0 строк, хотя запросы через проходили с кодом 200.
+**Первая версия CI ушла сразу в main.** Забыл создать ветку. Откатывать не стал, дальше работал
+через ветку и PR.
 
-**Причина:** запросы уходили в контейнер `credit-scoring:1.0`, запущенный ранее через `docker run` без `DATABASE_URL`, а не в локальный uvicorn с базой.
+**Тест не видел хост `db`.** `failed to resolve host 'db'`: это имя существует только внутри сети
+compose. С мака нужно ходить на `localhost`.
 
-**Как починил:** `docker ps` → `docker stop <контейнер>`, перезапустил локальный сервис.
+**Invalid workflow file после добавления Postgres.** `env` у сервиса был записан списком, а
+`DATABASE_URL` через `=` вместо `:`. Плюс имя базы осталось `churn` с семинара. Исправил.
 
-### 5 Отчёт по домашнему заданию 1
+**Без PR прогон не запускался.** Триггеры `push` только для main и `pull_request`, а я пушил в
+ветку. Открыл PR, проверки пошли.
 
-Кредитный скоринг на German Credit: CatBoost в sklearn `Pipeline`, сервис на FastAPI,
-логи в Postgres, Docker Compose и Kubernetes (kind). Все проверки ниже сняты
-на свежем клоне репозитория командами из README.
+**Ошибка YAML в job build.** В `tags` осталось `${{env : IMAGE}}`, двоеточие внутри значения
+ломало YAML. Исправил на `${{ env.IMAGE }}`.
 
+**Интеграционные тесты: Connection refused.** Контейнер с базой был остановлен. Поднял
+`docker compose up -d db`.
