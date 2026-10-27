@@ -3,3 +3,11 @@ __pycache__/
 .ipynb_checkpoints/
 .DS_Store
 *.pdf
+
+# локальные заметки и секреты
+.env
+.env.*
+hw3-journal.md
+hw3-log.txt
+CONTEXT.md
+hpa-bench/

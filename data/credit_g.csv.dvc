@@ -1,0 +1,5 @@
+outs:
+- md5: ac05ce3bfd911258bd37fde1e8a3051f
+  size: 139016
+  hash: md5
+  path: credit_g.csv
