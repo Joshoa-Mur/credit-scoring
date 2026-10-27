@@ -6,7 +6,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: scoring.localhost
+    - host: credit.localhost
       http:
         paths:
           - path: /
