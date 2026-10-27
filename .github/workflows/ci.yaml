@@ -128,7 +128,12 @@ jobs:
           U="http://$KIND_CLUSTER-control-plane:30080"; H="Host: scoring.localhost"
 
           # 1. модель пришла из реестра: в /health версия вида credit-scoring-vN
-          curl --fail -s --retry 5 --retry-all-errors -H "$H" $U/health | tee health.json; echo
+          # curl в образе runner старый (7.68), --retry-all-errors в нём нет: повторяем сами
+          for i in $(seq 1 10); do
+            curl --fail -s -H "$H" $U/health > health.json && break
+            echo "health: попытка $i не прошла, ждём"; sleep 3
+          done
+          cat health.json; echo
           grep -q '"model_version":"credit-scoring-v' health.json
 
           # 2. ответ на наших признаках осмысленный: score в [0, 1]
