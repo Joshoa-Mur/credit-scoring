@@ -8,6 +8,7 @@ dependencies = [
     "catboost>=1.2.8",
     "fastapi>=0.115",
     "joblib>=1.4",
+    "mlflow-skinny>=3.16,<4",
     "pandas>=2.2",
     "psycopg[binary]>=3.2",
     "pydantic>=2.7",
@@ -19,10 +20,12 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pytest",     
-    "httpx",      
+    "pytest",
+    "httpx",
     "locust",
-    "ruff"
+    "ruff",
+    "matplotlib>=3.11.2",
+    "dvc>=3.67.1",
 ]
 
 [build-system]
