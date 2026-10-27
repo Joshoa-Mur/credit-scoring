@@ -2,7 +2,6 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-import joblib
 import numpy as np
 import pandas as pd
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -13,6 +12,7 @@ from starlette.background import BackgroundTask
 
 from credit_scoring import db
 from credit_scoring.config import settings
+from credit_scoring.service.model_store import load_model
 
 
 class Features(BaseModel):
@@ -50,10 +50,7 @@ class Prediction(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bundle = joblib.load(settings.model_path)
-    app.state.pipeline = bundle["pipeline"]
-    app.state.meta = bundle["metadata"]
-    app.state.version = bundle["metadata"]["version"]
+    app.state.pipeline, app.state.meta, app.state.version = load_model()
     db.init()
 
     yield

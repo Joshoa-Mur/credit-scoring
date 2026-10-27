@@ -5,3 +5,6 @@ metadata:
 data:
   LOG_LEVEL: "INFO"
   MODEL_PATH: /app/models/credit_model.joblib
+  MLFLOW_TRACKING_URI: http://mlflow.mlops:5000
+  MODEL_NAME: credit-scoring
+  MODEL_ALIAS: champion
