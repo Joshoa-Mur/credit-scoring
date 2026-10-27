@@ -1,0 +1,15 @@
+# Сервис снаружи: http://scoring.localhost -> Service scoring-service:80 -> поды :8000
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: scoring-service
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: scoring.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: scoring-service, port: {number: 80}}
