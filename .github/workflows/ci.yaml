@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, hw3]   # hw3: деплой из рабочей ветки, пока идёт ДЗ 3
   pull_request:
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
 
   build:
     needs: tests
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: write}
 
@@ -46,10 +46,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # кластер kind живёт на маке с Apple Silicon (arm64), а облачный runner amd64:
+      # собираем образ под arm64 через эмуляцию QEMU
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/arm64
+          provenance: false
           push: true
           tags: ${{ env.IMAGE }}
           cache-from: type=gha
@@ -57,9 +62,14 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    # джоба идёт не в облаке GitHub, а на runner в Docker на маке, в одной сети с kind
+    runs-on: [self-hosted, kind]
+    concurrency: {group: deploy-kind}
+    timeout-minutes: 15
     permissions: {contents: read, packages: read}
+    env:
+      KIND_CLUSTER: credit
 
     steps:
       - uses: actions/checkout@v6
@@ -70,13 +80,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: helm/kind-action@v1
-        with: {cluster_name: ci}
+      - name: kind, kubectl и доступ к кластеру
+        run: |
+          echo "runner: $RUNNER_NAME ($(uname -m))"
+          ARCH=$(uname -m | sed 's/aarch64/arm64/; s/x86_64/amd64/')
+          B=~/.local/bin && mkdir -p $B && echo "$B" >> "$GITHUB_PATH"
+          [ -x $B/kind ] || curl -sSLo $B/kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-$ARCH
+          [ -x $B/kubectl ] || curl -sSLo $B/kubectl https://dl.k8s.io/v1.36.1/bin/linux/$ARCH/kubectl
+          chmod +x $B/kind $B/kubectl
+          # --internal: адрес API по имени узла в сети kind, а не 127.0.0.1 мака
+          $B/kind export kubeconfig --name "$KIND_CLUSTER" --internal
+          $B/kubectl get nodes
 
       - name: образ в кластер
+        # kind load docker-image падает на образах из containerd Docker Desktop
+        # ("content digest not found"), поэтому через архив одной платформы
         run: |
-          docker pull "$IMAGE"
-          kind load docker-image "$IMAGE" --name ci
+          docker pull --platform linux/arm64 "$IMAGE"
+          docker save --platform linux/arm64 "$IMAGE" -o image.tar
+          kind load image-archive image.tar --name "$KIND_CLUSTER"
+          rm -f image.tar
 
       - name: секреты
         env:
@@ -84,7 +107,8 @@ jobs:
         run: |
           kubectl create secret generic credit-secrets \
             --from-literal=POSTGRES_PASSWORD="$DB_PASSWORD" \
-            --from-literal=DATABASE_URL="postgresql://postgres:$DB_PASSWORD@postgres:5432/credit"
+            --from-literal=DATABASE_URL="postgresql://postgres:$DB_PASSWORD@postgres:5432/credit" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: БД
         run: |
@@ -98,22 +122,31 @@ jobs:
           kubectl rollout status deploy/credit-scoring --timeout=180s
 
       - name: smoke
+        # через Ingress, как ходят пользователи: из сети kind узел виден по имени,
+        # Traefik слушает NodePort 30080
         run: |
-          kubectl port-forward svc/scoring-service 8080:80 &
-          sleep 5
-          curl --fail -s localhost:8080/health \
-          | python3 -c "import json,sys; r=json.load(sys.stdin); print(r); assert r['model_path'] == '/app/models/credit_model.joblib', r"
-          curl --fail -s -X POST localhost:8080/v1/predict \
-            -H "Content-Type: application/json" -d @request.json \
-          | python3 -c "import json,sys; r=json.load(sys.stdin); print(r); assert 0 <= r['score'] <= 1, r"
+          U="http://$KIND_CLUSTER-control-plane:30080"; H="Host: scoring.localhost"
+
+          # 1. модель пришла из реестра: в /health версия вида credit-scoring-vN
+          curl --fail -s --retry 5 --retry-all-errors -H "$H" $U/health | tee health.json; echo
+          grep -q '"model_version":"credit-scoring-v' health.json
+
+          # 2. ответ на наших признаках осмысленный: score в [0, 1]
+          curl --fail -s -X POST -H "$H" $U/v1/predict \
+            -H "Content-Type: application/json" -d @request.json | tee pred.json; echo
+          jq -e '.score >= 0 and .score <= 1' pred.json
+
+          # 3. в базе ровно одна строка с этим request_id
           sleep 2
-          ROWS=$(kubectl exec deploy/postgres -- psql -U postgres -d credit -tAc "SELECT count(*) FROM predictions")
-          echo "rows: $ROWS"
-          [ "$ROWS" -ge 1 ]
+          RID=$(jq -r .request_id pred.json)
+          kubectl exec deploy/postgres -- psql -U postgres -d credit \
+            -tAc "SELECT count(*) FROM predictions WHERE request_id = '$RID'" | grep -qx 1
+          echo "строка $RID в predictions есть"
 
       - name: диагностика
         if: failure()
         run: |
-          kubectl get pods -o wide
+          kubectl get pods -A -o wide
+          kubectl get ingress -A
           kubectl describe deploy/credit-scoring | tail -20
-          kubectl logs deploy/credit-scoring --tail=30 || true
+          kubectl logs deploy/credit-scoring --tail=50 || true
