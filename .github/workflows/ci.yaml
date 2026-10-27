@@ -69,7 +69,7 @@ jobs:
     timeout-minutes: 15
     permissions: {contents: read, packages: read}
     env:
-      KIND_CLUSTER: credit
+      KIND_CLUSTER: credit-typo
 
     steps:
       - uses: actions/checkout@v6
